@@ -1,26 +1,24 @@
 #for multiple question and summary
-# app.py
 import os
 import re
 import torch
 import faiss
-import numpy as np
 import streamlit as st
 from pypdf import PdfReader
 from InstructorEmbedding import INSTRUCTOR
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from huggingface_hub import login
 
-# ========== 0. Hugging Face Token Login ==========
+# 🔐 Login to HuggingFace
 if "HUGGINGFACE_HUB_TOKEN" in st.secrets:
     login(st.secrets["HUGGINGFACE_HUB_TOKEN"])
 elif os.getenv("HUGGINGFACE_HUB_TOKEN"):
-    login(os.getenv("HUGGINGFACE_HUB_TOKEN"])
+    login(os.getenv("HUGGINGFACE_HUB_TOKEN"))
 else:
     st.error("❌ HuggingFace token not found. Set it in Streamlit secrets or environment.")
     st.stop()
 
-# ========== 1. Load Documents ==========
+# 1. Load PDF/TXT files
 def load_documents(folder_path):
     all_texts = []
     for file in os.listdir(folder_path):
@@ -37,11 +35,11 @@ def load_documents(folder_path):
                 all_texts.append(text)
     return all_texts
 
-# ========== 2. Sentence Tokenizer ==========
+# 2. Sentence tokenizer (fallback)
 def fallback_sent_tokenize(text):
     return re.split(r'(?<=[.?!])\s+', text.strip())
 
-# ========== 3. Chunk Text ==========
+# 3. Chunk text
 def chunk_text(text, max_words=100):
     sentences = fallback_sent_tokenize(text)
     chunks, current, count = [], [], 0
@@ -57,26 +55,25 @@ def chunk_text(text, max_words=100):
         chunks.append(" ".join(current))
     return chunks
 
-# ========== 4. Embed Chunks ==========
+# 4. Embed chunks
 def embed_chunks(chunks, model):
     instruction = "Represent the passage for retrieval:"
     inputs = [[instruction, chunk] for chunk in chunks]
-    embeddings = model.encode(inputs, show_progress_bar=False)
-    return np.array(embeddings).astype("float32")
+    return model.encode(inputs, show_progress_bar=False)
 
-# ========== 5. Build FAISS Index ==========
+# 5. Build FAISS index
 def build_faiss_index(embeddings):
     dim = embeddings.shape[1]
     index = faiss.IndexFlatL2(dim)
     index.add(embeddings)
     return index
 
-# ========== 6. Generate Answer or Summary ==========
+# 6. Generate answer or summary
 def generate_answer(query, retriever, passages, embeddings, index, gen_model, tokenizer, top_k=3):
     is_summary = "summary" in query.lower() or "summarize" in query.lower()
 
     if is_summary:
-        context = "\n".join(passages)[:1500]  # truncate for memory
+        context = "\n".join(passages)[:1500]
         prompt = f"Summarize the following document:\n\n{context}"
     else:
         q_embed = retriever.encode([["Represent the question for retrieving supporting documents", query]])
@@ -89,15 +86,22 @@ def generate_answer(query, retriever, passages, embeddings, index, gen_model, to
     outputs = gen_model.generate(**inputs, max_length=256)
     answer = tokenizer.decode(outputs[0], skip_special_tokens=True)
 
-    return answer, top_chunks if not is_summary else []
+    return (answer, top_chunks) if not is_summary else (answer, [])
 
-# ========== 7. Streamlit App ==========
+# 7. Streamlit App
 def main():
     st.set_page_config(page_title="🧠 RAG Q&A App", layout="wide")
     st.title("📚 Ask Questions from PDF/TXT using RAG")
 
     upload_folder = "uploads"
     os.makedirs(upload_folder, exist_ok=True)
+
+    # Load once
+    if "chunks" not in st.session_state:
+        st.session_state.chunks = []
+        st.session_state.embeddings = None
+        st.session_state.index = None
+        st.session_state.model_loaded = False
 
     uploaded_files = st.file_uploader("📤 Upload PDF or TXT files", type=["pdf", "txt"], accept_multiple_files=True)
 
@@ -109,48 +113,48 @@ def main():
                     f.write(file.read())
         st.success("✅ Files uploaded!")
 
-    # Model loading once per session
-    if "retriever" not in st.session_state:
+    if uploaded_files and not st.session_state.model_loaded:
         with st.spinner("⏳ Loading models..."):
             st.session_state.retriever = INSTRUCTOR("hkunlp/instructor-base")
             st.session_state.tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-base")
             st.session_state.gen_model = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-base")
+            st.session_state.model_loaded = True
 
-    # Preprocess files and cache chunks
-    if uploaded_files and "chunks" not in st.session_state:
         with st.spinner("📄 Processing documents..."):
             docs = load_documents(upload_folder)
             st.session_state.chunks = [chunk for doc in docs for chunk in chunk_text(doc)]
 
         with st.spinner("🔍 Embedding & indexing..."):
-            st.session_state.embeddings = embed_chunks(st.session_state.chunks, st.session_state.retriever)
+            embeddings = embed_chunks(st.session_state.chunks, st.session_state.retriever)
+            st.session_state.embeddings = torch.tensor(embeddings).numpy()
             st.session_state.index = build_faiss_index(st.session_state.embeddings)
 
-    question = st.text_input("❓ Enter your question or ask for a summary:")
+        st.success("✅ Ready for questions!")
 
-    if st.button("🧠 Get Answer") and question:
-        with st.spinner("🧠 Generating Answer..."):
-            answer, evidence_ids = generate_answer(
-                question,
-                st.session_state.retriever,
-                st.session_state.chunks,
-                st.session_state.embeddings,
-                st.session_state.index,
-                st.session_state.gen_model,
-                st.session_state.tokenizer
-            )
+    if st.session_state.chunks and st.session_state.index is not None:
+        question = st.text_input("❓ Enter your question:")
+        if question:
+            with st.spinner("🧠 Generating answer..."):
+                answer, evidence_ids = generate_answer(
+                    question,
+                    st.session_state.retriever,
+                    st.session_state.chunks,
+                    st.session_state.embeddings,
+                    st.session_state.index,
+                    st.session_state.gen_model,
+                    st.session_state.tokenizer
+                )
 
-            st.subheader("✅ Answer:")
-            st.success(answer)
+                st.subheader("✅ Answer:")
+                st.success(answer)
 
-            if evidence_ids:
-                st.subheader("📄 Evidence Chunks:")
-                for i in evidence_ids:
-                    st.markdown(f"**Chunk {i}:** {st.session_state.chunks[i]}")
+                if evidence_ids:
+                    st.subheader("📄 Evidence Chunks:")
+                    for i in evidence_ids:
+                        st.markdown(f"**Chunk {i}:** {st.session_state.chunks[i]}")
 
 if __name__ == "__main__":
     main()
-
 
 
 
