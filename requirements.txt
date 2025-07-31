@@ -1,8 +1,8 @@
 streamlit
-torch
+torch==2.1.2
 transformers==4.39.3
 huggingface_hub==0.25.1
 InstructorEmbedding==1.0.1
-sentence-transformers
+sentence-transformers==2.2.2
 pypdf
 faiss-cpu
