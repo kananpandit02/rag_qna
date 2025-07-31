@@ -2,9 +2,6 @@
 import os
 import re
 import torch
-import faissimport os
-import re
-import torch
 import faiss
 import streamlit as st
 from pypdf import PdfReader
