@@ -2,6 +2,7 @@ streamlit
 torch
 transformers==4.39.3
 huggingface_hub==0.25.1
-sentence-transformers==2.2.2
+sentence-transformers
 pypdf
 faiss-cpu
+InstructorEmbedding @ git+https://github.com/HKUNLP/InstructorEmbedding.git
