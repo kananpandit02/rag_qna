@@ -8,8 +8,18 @@ import streamlit as st
 from pypdf import PdfReader
 from InstructorEmbedding import INSTRUCTOR
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+from huggingface_hub import login
 
-# ========== 1. Load PDF and TXT Files ==========
+# 🔐 Login to HuggingFace (uses token from environment or Streamlit Secrets)
+if "HUGGINGFACE_HUB_TOKEN" in st.secrets:
+    login(st.secrets["HUGGINGFACE_HUB_TOKEN"])
+elif os.getenv("HUGGINGFACE_HUB_TOKEN"):
+    login(os.getenv("HUGGINGFACE_HUB_TOKEN"))
+else:
+    st.error("❌ HuggingFace token not found. Set it in Streamlit secrets or environment.")
+    st.stop()
+
+# 1. Load PDFs or TXTs
 def load_documents(folder_path):
     all_texts = []
     for file in os.listdir(folder_path):
@@ -26,11 +36,11 @@ def load_documents(folder_path):
                 all_texts.append(text)
     return all_texts
 
-# ========== 2. Simple Sentence Tokenizer ==========
+# 2. Fallback sentence tokenizer
 def fallback_sent_tokenize(text):
     return re.split(r'(?<=[.?!])\s+', text.strip())
 
-# ========== 3. Chunk Text ==========
+# 3. Chunk text into blocks
 def chunk_text(text, max_words=100):
     sentences = fallback_sent_tokenize(text)
     chunks, current, count = [], [], 0
@@ -46,25 +56,24 @@ def chunk_text(text, max_words=100):
         chunks.append(" ".join(current))
     return chunks
 
-# ========== 4. Embed Chunks ==========
+# 4. Embed chunks
 def embed_chunks(chunks, model):
     instruction = "Represent the passage for retrieval:"
     inputs = [[instruction, chunk] for chunk in chunks]
     return model.encode(inputs, show_progress_bar=False)
 
-# ========== 5. Build FAISS Index ==========
+# 5. Build FAISS index
 def build_faiss_index(embeddings):
     dim = embeddings.shape[1]
     index = faiss.IndexFlatL2(dim)
     index.add(embeddings)
     return index
 
-# ========== 6. Generate Answer or Summary ==========
+# 6. Generate summary or answer
 def generate_answer(query, retriever, passages, embeddings, index, gen_model, tokenizer, top_k=3):
     is_summary = "summary" in query.lower() or "summarize" in query.lower()
 
     if is_summary:
-        # Just summarize all chunks
         context = "\n".join(passages)
         prompt = f"Summarize the following document:\n\n{context}"
         inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
@@ -72,19 +81,17 @@ def generate_answer(query, retriever, passages, embeddings, index, gen_model, to
         answer = tokenizer.decode(outputs[0], skip_special_tokens=True)
         return answer, []
 
-    # For regular questions: use retrieval
     q_embed = retriever.encode([["Represent the question for retrieving supporting documents", query]])
     scores, indices = index.search(q_embed, top_k)
     top_chunks = sorted(set([i for i in indices[0] if i < len(passages)]))
     context = "\n".join([f"[Chunk {i}]: {passages[i]}" for i in top_chunks])
     prompt = f"question: {query} context: {context}"
-
     inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=512)
     outputs = gen_model.generate(**inputs, max_length=256)
     answer = tokenizer.decode(outputs[0], skip_special_tokens=True)
     return answer, top_chunks
 
-# ========== 7. Main Streamlit App ==========
+# 7. Streamlit UI
 def main():
     st.set_page_config(page_title="🧠 RAG Q&A App", layout="wide")
     st.title("📚 Ask Questions from PDF/TXT using RAG")
@@ -135,7 +142,6 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
 
 
