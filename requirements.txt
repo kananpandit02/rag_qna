@@ -5,4 +5,4 @@ huggingface_hub==0.25.1
 sentence-transformers
 pypdf
 faiss-cpu
-InstructorEmbedding @ git+https://github.com/HKUNLP/InstructorEmbedding.git
+git+https://github.com/HKUNLP/InstructorEmbedding.git
